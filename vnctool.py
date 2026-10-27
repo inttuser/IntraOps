@@ -6,7 +6,7 @@ VNC servers:
   sudo ./vnctool.py create  <user> [:N]   assign a display (next free one if :N is omitted) and start VNC
   sudo ./vnctool.py kill    <user> :N     stop VNC and free the display
   sudo ./vnctool.py restart <user> :N     restart a frozen VNC
-       ./vnctool.py info    [:N|user]     every VNC / xrdp session of all users, its memory + where each value comes from
+       ./vnctool.py info    [:N|user]     server hostname, VNC / RDP sessions, memory and simple notes
        ./vnctool.py mem                   server RAM: total, used, available
 VNC viewers (clients):
   sudo ./vnctool.py viewer setup   <tigervnc|realvnc> [file.rpm] [--replace]   install a viewer and select it
@@ -24,6 +24,7 @@ import io
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -48,7 +49,7 @@ VIEWERS = {"tigervnc": ("tigervnc", "TigerVNC"), "realvnc": ("realvnc-vnc-viewer
 STATES = {"active": "running", "activating": "running", "reloading": "running",
           "inactive": "stopped", "deactivating": "stopped", "failed": "failed"}
 NO_STATUS = ("info-all", "mem", "viewer-clients", "viewer-list", "viewer-connect")  # tables / started programs
-INFO_FMT = "%-4s %-30s %-8s %-19s %6s"  # ID USER STATUS STARTED MEM
+INFO_FMT = "%-4s %-30s %-8s %-20s %6s"  # ID USER STATUS STARTED MEM
 PS_XVNC = "ps -e -o pid -o ppid -o sid -o user:64 -o etimes -o rss -o args"  # how info finds the running sessions and their memory
 XVNC_RE = re.compile(r"\S*Xvnc\s+:([0-9]+)(\s|$)")
 # one -o per column: procps-ng 3.3.10 (CentOS 7) reads "-eo pid=,ppid=,..." as the pid column only
@@ -344,8 +345,17 @@ def do_restart(args):  # <user> :N
 
 
 def started_at(seconds):
-    """How long a process runs (ps etimes) -> when it was started, "2026-10-08 17:30:48" """
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - seconds))
+    """Process age in seconds -> start month, "10.2026"."""
+    return time.strftime("%m.%Y", time.localtime(time.time() - seconds))
+
+
+def duration_days(seconds):
+    days = seconds // 86400
+    return "%d %s" % (days, "day" if days == 1 else "days")
+
+
+def started_with_duration(started, duration):
+    return "%s (%s)" % (started, duration) if started != "-" else "-"
 
 
 def human_kb(kb):
@@ -453,7 +463,7 @@ def session_rss(pid, procs):
 
 
 def xvnc_sessions(procs=None):
-    """Running Xvnc processes of all users -> {display: (user, started, mem_kb, is_xrdp)}."""
+    """Running Xvnc -> {display: (user, started, mem_kb, is_xrdp, duration)}."""
     if procs is None:
         procs = processes()
     sessions = {}
@@ -462,7 +472,8 @@ def xvnc_sessions(procs=None):
         if not m:
             continue
         mem_kb = session_rss(pid, procs)
-        sessions[int(m.group(1))] = (user, started_at(etimes), mem_kb, xrdp_sesexec(pid, procs) is not None)
+        sessions[int(m.group(1))] = (user, started_at(etimes), mem_kb,
+                                   xrdp_sesexec(pid, procs) is not None, duration_days(etimes))
     return sessions
 
 
@@ -489,19 +500,19 @@ def do_info(args):  # [:N | user]   (read-only)
     rows = []
     for d in sorted(set(owners) | set(running)):
         if d in running:
-            user, started, mem_kb, is_xrdp = running[d]
+            user, started, mem_kb, is_xrdp, duration = running[d]
             notes = []
             if is_xrdp:
-                notes.append("xrdp")
+                notes.append("Remote desktop (RDP)")
             elif have_file and d not in owners:
-                notes.append("not in vncserver.users")
+                notes.append("Not configured")
             if d in owners and owners[d] != user:
-                notes.append("file: %s" % (owners[d] or "-"))
+                notes.append("Assigned to %s in settings" % owners[d] if owners[d] else "No user assigned in settings")
             if not is_xrdp and state.get(d, "running") != "running":
-                notes.append("unit " + state[d])
-            rows.append((d, user, "running", started, human_kb(mem_kb), "ps", ", ".join(notes)))
+                notes.append("Service " + state[d])
+            rows.append((d, user, "running", started, human_kb(mem_kb), "ps", "; ".join(notes), duration))
         else:
-            rows.append((d, owners[d] or "-", state[d], "-", "-", "file", ""))
+            rows.append((d, owners[d] or "-", state[d], "-", "-", "file", "", "-"))
 
     if display is not None:
         rows = [r for r in rows if r[0] == display]
@@ -510,9 +521,11 @@ def do_info(args):  # [:N | user]   (read-only)
     if only_user:
         rows = [r for r in rows if r[1] == only_user]
 
-    out(INFO_FMT % ("ID", "USER", "STATUS", "STARTED", "MEM") + "  NOTE")
+    out("Server: " + socket.gethostname(), "",
+        INFO_FMT % ("ID", "USER", "STATUS", "STARTED", "MEM") + "  NOTE")
     for row in rows:
-        out((INFO_FMT % ((":%d" % row[0],) + row[1:5]) + "  " + row[6]).rstrip())
+        started = started_with_duration(row[3], row[7])
+        out((INFO_FMT % ((":%d" % row[0],) + row[1:3] + (started, row[4])) + "  " + row[6]).rstrip())
 
     # where the values come from: once under the table, not on every row
     sources = {
