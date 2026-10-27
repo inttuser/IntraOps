@@ -3,6 +3,9 @@
 Target: Rocky Linux 8, tigervnc-server 1.15
 
 VNC servers:
+       ./vnc.py start                    start your assigned session (choose if several)
+       ./vnc.py kill                     stop your session, keeping its assignment
+       ./vnc.py restart                  restart your assigned session
   sudo ./vnc.py create  <user> [:N]   assign a display (next free one if :N is omitted) and start VNC
   sudo ./vnc.py kill    <user> :N     stop VNC and free the display
   sudo ./vnc.py restart <user> :N     restart a frozen VNC
@@ -323,7 +326,79 @@ def owned_display(args, name):
     return user, display
 
 
+def do_self_session(verb):
+    user = caller()
+    try:
+        with io.open(USERS_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except (IOError, OSError) as exc:
+        die(4, "cannot read %s: %s" % (USERS_FILE, exc))
+    owners = {}
+    for line in lines:
+        m = fullmatch(r"\s*:([0-9]{1,2})=(\S*)\s*", line)
+        if m:
+            display = parse_display(m.group(1))
+            if display in owners:
+                die(4, "duplicate display :%d in %s; ask an administrator to fix it" % (display, USERS_FILE))
+            owners[display] = m.group(2)
+    displays = sorted(d for d, owner in owners.items() if owner == user)
+    if not displays:
+        die(3, "no VNC session assigned to %s; ask an administrator to assign one" % user)
+
+    running = xvnc_sessions()
+    session_states = states(displays)
+    display = displays[0]
+    if len(displays) > 1:
+        out("Choose your VNC session:")
+        for index, d in enumerate(displays, 1):
+            session = running.get(d)
+            status = "running" if session else session_states[d]
+            started = started_with_duration(session[1], session[4]) if session else "-"
+            out("  %d) :%d  %s  %s" % (index, d, status, started))
+        try:
+            out("Enter a session number (Ctrl-C to cancel):")
+            answer = sys.stdin.readline()
+        except KeyboardInterrupt:
+            die(2, "session selection cancelled")
+        if not fullmatch(r"[0-9]+", answer.strip()):
+            die(2, "no valid session selected")
+        choice = int(answer.strip())
+        if not 1 <= choice <= len(displays):
+            die(2, "session number must be between 1 and %d" % len(displays))
+        display = displays[choice - 1]
+
+    session = running.get(display)
+    if session and (session[0] != user or session[3]):
+        die(3, "display :%d has a different owner or is an RDP session; ask an administrator" % display)
+    require_owner(user, display)
+    cmd = ("/usr/bin/systemctl", verb, unit(display))
+    if not is_root():
+        cmd = ("/usr/bin/sudo", "-n") + cmd
+    if not run(*cmd):
+        die(4, "could not %s %s; check the service and ask an administrator to verify "
+            "your exact passwordless systemctl permission" % (verb, unit(display)))
+    state = state_of(display)
+    expected = "stopped" if verb == "stop" else "running"
+    if state != expected:
+        die(4, "%s completed but %s is %s; ask an administrator to check the service" %
+            (verb, unit(display), state))
+    log("self-service %s :%d of %s state=%s" % (verb, display, user, state))
+    out("%s :%d for %s (assignment kept)" %
+        ({"start": "Started", "stop": "Stopped", "restart": "Restarted"}[verb], display, user))
+    if verb != "stop":
+        out("Connect: %s::%d" % (socket.gethostname(), BASE_PORT + display))
+    out("STATUS=" + state)
+
+
+def do_start(args):
+    need(args, 0, 0, "start")
+    do_self_session("start")
+
+
 def do_kill(args):  # <user> :N
+    if not args:
+        do_self_session("stop")
+        return
     user, display = owned_display(args, "kill")
     lock()
     require_owner(user, display)
@@ -336,6 +411,9 @@ def do_kill(args):  # <user> :N
 
 
 def do_restart(args):  # <user> :N
+    if not args:
+        do_self_session("restart")
+        return
     user, display = owned_display(args, "restart")
     require_owner(user, display)
     if not run("systemctl", "restart", unit(display)):
@@ -851,7 +929,7 @@ def viewer_connect(args):  # <host::port|host:N>
 # ------------------------------------------------------------------ main
 
 
-ACTIONS = {"create": do_create, "kill": do_kill, "delete": do_kill, "restart": do_restart, "info": do_info,
+ACTIONS = {"create": do_create, "start": do_start, "kill": do_kill, "delete": do_kill, "restart": do_restart, "info": do_info,
            "infoall": do_infoall, "mem": do_mem}
 VIEWER_ACTIONS = {"setup": viewer_setup, "mode": viewer_mode, "clients": viewer_clients,
                   "list": viewer_list, "kill": viewer_kill, "connect": viewer_connect}
