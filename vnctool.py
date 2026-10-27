@@ -7,6 +7,7 @@ VNC servers:
   sudo ./vnctool.py kill    <user> :N     stop VNC and free the display
   sudo ./vnctool.py restart <user> :N     restart a frozen VNC
        ./vnctool.py info    [:N|user]     server hostname, VNC / RDP sessions, memory and simple notes
+       ./vnctool.py infoall               VNC / RDP sessions and RAM on all configured servers
        ./vnctool.py mem                   server RAM: total, used, available
 VNC viewers (clients):
   sudo ./vnctool.py viewer setup   <tigervnc|realvnc> [file.rpm] [--replace]   install a viewer and select it
@@ -48,7 +49,7 @@ LOCK_WAIT = 10  # seconds to wait for the vncserver.users lock
 VIEWERS = {"tigervnc": ("tigervnc", "TigerVNC"), "realvnc": ("realvnc-vnc-viewer", "RealVNC")}  # mode -> package, name
 STATES = {"active": "running", "activating": "running", "reloading": "running",
           "inactive": "stopped", "deactivating": "stopped", "failed": "failed"}
-NO_STATUS = ("info-all", "mem", "viewer-clients", "viewer-list", "viewer-connect")  # tables / started programs
+NO_STATUS = ("info-all", "infoall", "mem", "viewer-clients", "viewer-list", "viewer-connect")  # tables / started programs
 INFO_FMT = "%-4s %-30s %-8s %-20s %6s"  # ID USER STATUS STARTED MEM
 PS_XVNC = "ps -e -o pid -o ppid -o sid -o user:64 -o etimes -o rss -o args"  # how info finds the running sessions and their memory
 XVNC_RE = re.compile(r"\S*Xvnc\s+:([0-9]+)(\s|$)")
@@ -542,6 +543,13 @@ def do_info(args):  # [:N | user]   (read-only)
         out("STATUS=" + rows[0][2])
 
 
+def do_infoall(args):
+    need(args, 0, 0, "infoall")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import vncreport
+    sys.exit(vncreport.main([]))
+
+
 def do_mem(args):  # (read-only)
     need(args, 0, 0, "mem")
     kb = {}
@@ -844,7 +852,7 @@ def viewer_connect(args):  # <host::port|host:N>
 
 
 ACTIONS = {"create": do_create, "kill": do_kill, "delete": do_kill, "restart": do_restart, "info": do_info,
-           "mem": do_mem}
+           "infoall": do_infoall, "mem": do_mem}
 VIEWER_ACTIONS = {"setup": viewer_setup, "mode": viewer_mode, "clients": viewer_clients,
                   "list": viewer_list, "kill": viewer_kill, "connect": viewer_connect}
 
