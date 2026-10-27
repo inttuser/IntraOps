@@ -19,18 +19,19 @@ import threading
 from multiprocessing.pool import ThreadPool
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import vnctool  # noqa: E402  (its ps parsing and session / memory logic are reused)
+import vnc  # noqa: E402  (its ps parsing and session / memory logic are reused)
 
 SSH_USER = "refuser"
-SERVERS = [("192.168.1.210", "-"), ("192.168.1.212", "srv-rocky-1"), ("192.168.1.11", "-")]
-SERVERS += [("192.168.1.%d" % (12 + i), "Runtime%d" % (i + 1)) for i in range(4)]
+SERVERS = [("192.168.1.212", "srv-rocky-1")]
 SERVERS += [("192.168.1.%d" % (16 + i), "Comodel%d" % (i + 1)) for i in range(8)]
+SERVERS += [("192.168.1.210", "-"), ("192.168.1.11", "-")]
+SERVERS += [("192.168.1.%d" % (12 + i), "Runtime%d" % (i + 1)) for i in range(4)]
 SSH_TIMEOUT = 10  # seconds to connect
 RUN_TIMEOUT = 30  # seconds for the whole server
 WORKERS = 8
 
 # the only thing run on a server: reads, no changes. Sections are separated by @@ lines.
-REMOTE = (" ".join(vnctool.PS_COMMAND) + "; "
+REMOTE = (" ".join(vnc.PS_COMMAND) + "; "
           "echo @@HOST; hostname 2>/dev/null; "
           "echo @@MEM; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; "
           "echo @@USERS; cat /etc/tigervnc/vncserver.users 2>/dev/null; "
@@ -57,7 +58,7 @@ def explain(stderr):
 
 def local_ips():
     """Addresses of this machine (hostname -I)"""
-    return set(vnctool.capture("hostname", "-I")[1].split())
+    return set(vnc.capture("hostname", "-I")[1].split())
 
 
 def command_for(ip, local):
@@ -111,7 +112,7 @@ def sections(text):
     """remote output -> {"PS": [lines], "MEM": [...], "USERS": [...], "UNITS": [...], "CGROUP": [...]}"""
     result, current = {"PS": []}, "PS"
     for line in text.splitlines():
-        m = vnctool.fullmatch(r"@@([A-Z]+)", line)
+        m = vnc.fullmatch(r"@@([A-Z]+)", line)
         if m:
             current = m.group(1)
             result[current] = []
@@ -121,7 +122,7 @@ def sections(text):
 
 
 def parse(text):
-    """-> (ram_total_kb, ram_available_kb, rows); a row is (display, user, kind, status, started, mem_kb)"""
+    """-> (ram_total_kb, ram_available_kb, rows); row: (display, user, kind, status, started, mem_kb, duration)"""
     s = sections(text)
     kb = {}
     for line in s.get("MEM", []):
@@ -129,26 +130,26 @@ def parse(text):
         if m:
             kb[m.group(1)] = int(m.group(2))
 
-    running = vnctool.xvnc_sessions(vnctool.parse_processes(s["PS"], vnctool.parse_scopes(s.get("CGROUP", []))))
+    running = vnc.xvnc_sessions(vnc.parse_processes(s["PS"], vnc.parse_scopes(s.get("CGROUP", []))))
     owners = {}
     for line in s.get("USERS", []):
-        m = vnctool.fullmatch(r"\s*:([0-9]{1,2})=(\S*)\s*", line)
+        m = vnc.fullmatch(r"\s*:([0-9]{1,2})=(\S*)\s*", line)
         if m:
             owners.setdefault(int(m.group(1)), m.group(2))
     units = {}
     for line in s.get("UNITS", []):
         f = line.split()  # "vncserver@:1.service loaded failed failed Remote desktop service"
-        m = vnctool.fullmatch(r"vncserver@:([0-9]+)\.service", f[0]) if len(f) > 2 else None
+        m = vnc.fullmatch(r"vncserver@:([0-9]+)\.service", f[0]) if len(f) > 2 else None
         if m:
-            units[int(m.group(1))] = vnctool.STATES.get(f[2], "unknown")
+            units[int(m.group(1))] = vnc.STATES.get(f[2], "unknown")
 
     rows = []
     for d in sorted(set(owners) | set(running)):
         if d in running:
-            user, started, mem_kb, is_xrdp = running[d]
-            rows.append((d, user, "xrdp" if is_xrdp else "vnc", "running", started, mem_kb))
+            user, started, mem_kb, is_xrdp, duration = running[d]
+            rows.append((d, user, "xrdp" if is_xrdp else "vnc", "running", started, mem_kb, duration))
         else:  # a unit that systemd does not list at all is not started
-            rows.append((d, owners[d] or "-", "-", units.get(d, "stopped"), "-", None))
+            rows.append((d, owners[d] or "-", "-", units.get(d, "stopped"), "-", None, "-"))
     return kb.get("MemTotal"), kb.get("MemAvailable"), rows
 
 
@@ -157,7 +158,7 @@ def main(argv):
         print(__doc__.strip())
         return 0
     names = dict(SERVERS)
-    if argv and argv[0] == "info":  # same word as vnctool.py info
+    if argv and argv[0] == "info":  # same word as vnc.py info
         argv = argv[1:]
     ips = argv or [ip for ip, _ in SERVERS]
     unknown = [ip for ip in ips if ip not in names]
@@ -183,17 +184,19 @@ def main(argv):
         if total and available is not None:
             used = total - available
             print("RAM: %s used of %s (%d%%), %s available" % (
-                vnctool.human_kb(used), vnctool.human_kb(total), round(100.0 * used / total),
-                vnctool.human_kb(available)))
+                vnc.human_kb(used), vnc.human_kb(total), round(100.0 * used / total),
+                vnc.human_kb(available)))
         else:
             print("RAM: unknown")
         if not rows:
             print("No VNC / xrdp sessions")
         else:
-            print("%-4s %-30s %-5s %-8s %-19s %6s" % ("ID", "USER", "TYPE", "STATUS", "STARTED", "MEM"))
-            for d, user, kind, state, started, mem_kb in rows:
-                print("%-4s %-30s %-5s %-8s %-19s %6s" % (
-                    ":%d" % d, user, kind, state, started, vnctool.human_kb(mem_kb) if mem_kb else "-"))
+            fmt = "%-4s %-30s %-5s %-8s %-20s %6s"
+            print(fmt % ("ID", "USER", "TYPE", "STATUS", "STARTED", "MEM"))
+            for d, user, kind, state, started, mem_kb, duration in rows:
+                print(fmt % (
+                    ":%d" % d, user, kind, state, vnc.started_with_duration(started, duration),
+                    vnc.human_kb(mem_kb) if mem_kb else "-"))
         print()
 
     print("%d of %d servers answered" % (len(ips) - failed, len(ips)))

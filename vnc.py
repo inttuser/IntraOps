@@ -1,21 +1,21 @@
 #!/usr/libexec/platform-python -I
-"""vnctool.py - TigerVNC servers (systemd + vncserver.users) and VNC viewers (TigerVNC / RealVNC)
+"""vnc.py - TigerVNC servers (systemd + vncserver.users) and VNC viewers (TigerVNC / RealVNC)
 Target: Rocky Linux 8, tigervnc-server 1.15
 
 VNC servers:
-  sudo ./vnctool.py create  <user> [:N]   assign a display (next free one if :N is omitted) and start VNC
-  sudo ./vnctool.py kill    <user> :N     stop VNC and free the display
-  sudo ./vnctool.py restart <user> :N     restart a frozen VNC
-       ./vnctool.py info    [:N|user]     server hostname, VNC / RDP sessions, memory and simple notes
-       ./vnctool.py infoall               VNC / RDP sessions and RAM on all configured servers
-       ./vnctool.py mem                   server RAM: total, used, available
+  sudo ./vnc.py create  <user> [:N]   assign a display (next free one if :N is omitted) and start VNC
+  sudo ./vnc.py kill    <user> :N     stop VNC and free the display
+  sudo ./vnc.py restart <user> :N     restart a frozen VNC
+       ./vnc.py info    [:N|user]     server hostname, VNC / RDP sessions, memory and simple notes
+       ./vnc.py infoall               VNC / RDP sessions and RAM on all configured servers
+       ./vnc.py mem                   server RAM: total, used, available
 VNC viewers (clients):
-  sudo ./vnctool.py viewer setup   <tigervnc|realvnc> [file.rpm] [--replace]   install a viewer and select it
-  sudo ./vnctool.py viewer mode    [tigervnc|realvnc]   show / select the viewer mode
-       ./vnctool.py viewer clients                      installed viewers, versions, which one is selected
-       ./vnctool.py viewer list    [user]               running viewers: owner, target, duration, CPU, memory
-       ./vnctool.py viewer kill    <user> <pid|all>     stop one viewer (or all viewers) of a user
-       ./vnctool.py viewer connect <host::port|host:N>  open the selected viewer
+  sudo ./vnc.py viewer setup   <tigervnc|realvnc> [file.rpm] [--replace]   install a viewer and select it
+  sudo ./vnc.py viewer mode    [tigervnc|realvnc]   show / select the viewer mode
+       ./vnc.py viewer clients                      installed viewers, versions, which one is selected
+       ./vnc.py viewer list    [user]               running viewers: owner, target, duration, CPU, memory
+       ./vnc.py viewer kill    <user> <pid|all>     stop one viewer (or all viewers) of a user
+       ./vnc.py viewer connect <host::port|host:N>  open the selected viewer
 """
 
 from __future__ import print_function
@@ -613,7 +613,7 @@ def save_mode(mode):
     try:
         if not DRY_RUN:
             os.makedirs(os.path.dirname(VIEWER_CONF), exist_ok=True)
-        write(VIEWER_CONF, "# written by vnctool.py\nVIEWER_MODE=%s\n" % mode)
+        write(VIEWER_CONF, "# written by vnc.py\nVIEWER_MODE=%s\n" % mode)
     except OSError:
         die(4, "cannot write " + VIEWER_CONF)
 
@@ -869,12 +869,12 @@ def main(argv):
     if action in ("-h", "--help", "help"):
         usage(0)
 
-    if action == "viewer":            # vnctool.py viewer <sub> ...
+    if action == "viewer":            # vnc.py viewer <sub> ...
         sub = args[0] if args else ""
         args = args[1:]
         action = "viewer-" + sub
         func = VIEWER_ACTIONS.get(sub)
-    else:                             # vnctool.py <action> ...
+    else:                             # vnc.py <action> ...
         if action == "delete":
             action = "kill"
         func = ACTIONS.get(action)
